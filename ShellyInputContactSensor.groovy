@@ -1,6 +1,6 @@
 /**
  *   
- *  Shelly Input Driver
+ *  Shelly Input Contact Sensor
  *
  *  Copyright © 2018-2019 Scott Grayban
  *  Copyright © 2020 Allterco Robotics US
@@ -23,7 +23,7 @@
  *
  *  Changes:
  *  
- *  1.0.0 - Initial code - Unofficial Custom Driver - Code borrowed and modified to support the Shelly ${state.devicetype} Devices
+ *  1.0.0 - Initial code - Unofficial Custom Driver - Code borrowed and modified to support the Shelly i4 and i4dc Devices
  *              Removed the Check FW and Upgrade features. /Corey
  *
  */
@@ -35,7 +35,7 @@ import groovy.transform.Field
 
 def setVersion(){
 	state.Version = "1.0.0"
-	state.InternalName = "ShellyInputUnofficialDriver"
+	state.InternalName = "ShellyInputContactUnofficialDriver"
 }
 
 metadata {
@@ -49,20 +49,20 @@ metadata {
         capability "Polling"
         capability "SignalStrength"
         capability "Initialize"
-
-
+        capability "PresenceSensor"
         command "RebootDevice"
 
+
+
         attribute "WiFiSignal", "string"
-        
-       
+    
 }
     
 
 	preferences {
 	def refreshRate = [:]
 		refreshRate << ["1 min" : "Refresh every minute"]
-    refreshRate << ["5 min" : "Refresh every 5 minutes"]
+        refreshRate << ["5 min" : "Refresh every 5 minutes"]
 		refreshRate << ["15 min" : "Refresh every 15 minutes"]
 		refreshRate << ["30 min" : "Refresh every 30 minutes"]
 		refreshRate << ["manual" : "Manually or Polling Only"]
@@ -70,9 +70,9 @@ metadata {
 	input("ip", "string", title:"IP", description:"Shelly IP Address", defaultValue:"" , required: true)
 	input name: "username", type: "text", title: "Username:", description: "(blank if none)", required: false
 	input name: "password", type: "password", title: "Password:", description: "(blank if none)", required: false
-  input name: "isrounded", type: "bool", title: "Rounded Numbers", defaultValue: true
-  input("refresh_Rate", "enum", title: "Device Refresh Rate", description:"<font color=red>!!WARNING!!</font><br>DO NOT USE if you have over 50 Shelly devices.", options: refreshRate, defaultValue: "manual")
-  input name: "debugOutput", type: "bool", title: "Enable debug logging?", defaultValue: true
+    input name: "isrounded", type: "bool", title: "Rounded Numbers", defaultValue: true
+    input("refresh_Rate", "enum", title: "Device Refresh Rate", description:"<font color=red>!!WARNING!!</font><br>DO NOT USE if you have over 50 Shelly devices.", options: refreshRate, defaultValue: "manual")
+    input name: "debugOutput", type: "bool", title: "Enable debug logging?", defaultValue: true
 	input name: "debugParse", type: "bool", title: "Enable JSON parse logging?", defaultValue: true
 	input name: "txtEnable", type: "bool", title: "Enable descriptionText logging", defaultValue: true
 	}
@@ -84,18 +84,19 @@ def initialize() {
     log.info "Shelly ${state.devicetype} IP ${ip} device type = ${state.devicetype} channels = ${state.channels}."
     if (state.channels) {
         String thisId = device.id
-        for (int myindex = 1; myindex <= state.channels; myindex++) {
-            mychannel = myindex - 1
-            state."inputcount${mychannel}" = 0      
-            state."inputupdateflag${mychannel}" = true
-            if (!getChildDevice("${thisId}-Channel${myindex}")) {
-                addChildDevice("ShellyUSA-Custom", "Shelly Contact Device", "${thisId}-Channel${myindex}", [name: "Channel${myindex}", isComponent: true])
-                log.info "Shelly ${state.devicetype} IP ${ip} installing child ${thisId}-Channel${myindex}."
+        for (int myindex = 0; myindex < state.channels; myindex++) {
+            mychannel = myindex + 1
+            state."inputcount${myindex}" = 0      
+            state."inputupdateflag${myindex}" = true
+            if (!getChildDevice("${thisId}-Channel${mychannel}")) {
+                addChildDevice("ShellyUSA-Custom", "Shelly Contact Device", "${thisId}-Channel${mychannel}", [name: "${thisId}-Channel${mychannel}", isComponent: true])
+                log.info "Shelly ${state.devicetype} IP ${ip} installing child ${thisId}-Channel${mychannel}."
                 }
             }
         }    
-    runIn(2,getContactConfig)
-    runIn(10,getContactStatusAll)
+    sendEvent(name: "presence", value: "unknown")
+    getContactConfig()
+    runIn(3,getContactStatusAll)
 }
 
 def installed() {
@@ -151,8 +152,10 @@ private dbCleanUp() {
 
 def refresh() {
     logDebug "Shelly ${state.devicetype} IP ${ip} refresh."
+    //for (int myindex = 0; myindex < state.channels; myindex++) { state."inputupdateflag${myindex}" = true }
     getContactConfig()
     getContactStatusAll()
+    //updateChildren()
 }
 
 def getContactConfig() {
@@ -165,11 +168,15 @@ def getContactConfig() {
                 logJSON "Shelly ${state.devicetype} IP ${ip} params: ${params}"
                 logJSON "Shelly ${state.devicetype} IP ${ip} response contentType: ${resp.contentType}"
 	            logJSON "Shelly ${state.devicetype} IP ${ip} response data: ${resp.data}"
+                if (getDataValue("presence") != "present") sendEvent(name: "presence", value: "present") 
                 state."inputtype${myindex}" = obs.type
                 state."inputname${myindex}" = obs.name
                 state."inputinvert${myindex}" = obs.invert
                 } // End try
-            } catch (e) { log.error "Shelly ${state.devicetype} IP ${ip} getContactStatus something went wrong: $e" }
+            } catch (e) { 
+                log.error "Shelly ${state.devicetype} IP ${ip} getContactStatus something went wrong: $e" 
+                if (getDataValue("presence") != "not present") sendEvent(name: "presence", value: "not present") 
+            }
         }    
     }    
     //runIn(3,updateChildren)
@@ -183,13 +190,17 @@ def getContactChannelStatus(myindex) {
         logJSON "Shelly ${state.devicetype} IP ${ip} params: ${params}"
         logJSON "Shelly ${state.devicetype} IP ${ip} response contentType: ${resp.contentType}"
 	    logJSON "Shelly ${state.devicetype} IP ${ip} response data: ${resp.data}"
+        if (getDataValue("presence") != "present") sendEvent(name: "presence", value: "present") 
         if (obs.state != state."inputstate${myindex}") {
             log.info "Shelly ${state.devicetype} IP ${ip} getContactChannelStatus detected state change Channel ${myindex}"
             state."inputstate${myindex}" = obs.state
             state."inputupdateflag${myindex}" = true
             }
         } // End try
-   } catch (e) { log.error "Shelly ${state.devicetype} IP ${ip} getContactChannelStatus something went wrong: $e" }
+   } catch (e) { 
+        log.error "Shelly ${state.devicetype} IP ${ip} getContactChannelStatus something went wrong: $e" 
+        if (getDataValue("presence") != "not present") sendEvent(name: "presence", value: "not present") 
+   }
 } // End getContactChannelStatus
 
 
@@ -203,24 +214,21 @@ def getContactStatusAll() {
 def updateChildren() {
     if (state.channels) {
         String thisId = device.id
-        for (int myindex = 1; myindex <= state.channels; myindex++) {
-            child = getChildDevice("${thisId}-Channel${myindex}")
+        for (int myindex = 0; myindex < state.channels; myindex++) {
+            mychannel = myindex + 1
+            child = getChildDevice("${thisId}-Channel${mychannel}")
             if (child) {
-                if (state."inputupdateflag${mychannel}" == true) { 
-                   if (state."inputtype${mychannel}" == "switch" && state."inputstate${mychannel}" == true) {
-                        child.sendEvent(name: "contact", value: "active") 
-                        //child.sendEvent(name: "lastchange", value: getDateTime()) 
-                        child.sendEvent(name: "count", value: state."inputcount${mychannel}") 
-                        state."inputtype${mychannel}" = false
+                if (state."inputupdateflag${myindex}" == true) { 
+                   if (state."inputtype${myindex}" == "switch" && state."inputstate${myindex}" == true) {
+                        child.sendEvent(name: "contact", value: "closed") 
+                        child.sendEvent(name: "count", value: state."inputcount${myindex}") 
+                        state."inputupdateflag${myindex}" = false
                    }     
-                if (state."inputtype${mychannel}" == "switch" && state."inputstate${mychannel}" == false ) {
-                        child.sendEvent(name: "contact", value: "inactive") 
-                        state."inputtype${mychannel}" = false
-                        //child.sendEvent(name: "lastchange", value: getDateTime()) 
-                        child.sendEvent(name: "count", value: state."inputcount${mychannel}") 
+                if (state."inputtype${myindex}" == "switch" && state."inputstate${myindex}" == false ) {
+                        child.sendEvent(name: "contact", value: "open") 
+                        state."inputupdateflag${myindex}" = false
+                        child.sendEvent(name: "count", value: state."inputcount${myindex}") 
                    }
-               
-               state."inputupdateflag${mychannel}" = false
                }
             } else { log.error "Shelly ${state.devicetype} IP ${ip} updateChildren something went wrong: $e re-initialize please." }
         }
@@ -228,91 +236,85 @@ def updateChildren() {
 }
 
 def updateChild(mychannel) {
+    log.debug "Shelly ${state.devicetype} IP ${ip} mychannel = ${mychannel} "
     if (state.channels) {
         String thisId = device.id
-        myindex = "${mychannel}"; myindex++
-        child = getChildDevice("${thisId}-Channel${myindex}")
-        //log.info "Shelly ${state.devicetype} IP ${ip} myindex = ${myindex} mychannel = ${mychannel} child = ${child}"
+        myindex = mychannel.toInteger() - 1
+        mystate = state."inputupdateflag${myindex}"
+        log.debug "Shelly ${state.devicetype} IP ${ip} myindex = ${myindex} mychannel = ${mychannel} state = ${mystate}"
+        child = getChildDevice("${thisId}-Channel${mychannel}")
+        log.debug "Shelly ${state.devicetype} IP ${ip} child = ${child}"
         if (child) {
-            if (state."inputupdateflag${mychannel}" == true) { 
-                if (state."inputtype${mychannel}" == "switch" && state."inputstate${mychannel}" == false) {
-                   child.sendEvent(name: "contact", value: "inactive") 
-                   child.sendEvent(name: "count", value: state."inputcount${mychannel}") 
-                   //child.sendEvent(name: "lastchange", value: getDateTime()) 
+            if (state."inputupdateflag${myindex}" == true) { 
+                if (state."inputtype${myindex}" == "switch" && state."inputstate${myindex}" == false) {
+                   child.sendEvent(name: "contact", value: "open") 
+                   child.sendEvent(name: "count", value: state."inputcount${myindex}") 
                }
-                if (state."inputtype${mychannel}" == "switch" && state."inputstate${mychannel}" == true) {
-                   child.sendEvent(name: "contact", value: "active") 
-                   child.sendEvent(name: "count", value: state."inputcount${mychannel}") 
-                   //child.sendEvent(name: "lastchange", value: getDateTime()) 
+                if (state."inputtype${myindex}" == "switch" && state."inputstate${myindex}" == true) {
+                   child.sendEvent(name: "contact", value: "closed") 
+                   child.sendEvent(name: "count", value: state."inputcount${myindex}") 
                    }
                 }
-              state."inputupdateflag${mychannel}" = false
-              if (state."inputtype${mychannel}" == "button") {
-                   child.sendEvent(name: "contact", value: "active") 
-                   child.sendEvent(name: "count", value: state."inputcount${mychannel}") 
-                   //child.sendEvent(name: "lastchange", value: getDateTime() ) 
-                   runIn(3,updateChildInactive)
+              state."inputupdateflag${myindex}" = false
+              if (state."inputtype${myindex}" == "button") {
+                   child.sendEvent(name: "contact", value: "closed") 
+                   child.sendEvent(name: "count", value: state."inputcount${myindex}")  
+                   runIn(3,updateChildClearButton)
                    }
         } else { log.error "Shelly ${state.devicetype} IP ${ip} updateChild something went wrong: $e re-initialize please." }
         
     }
 }
 
-def updateChildInactive() {
+def updateChildClearButton() {
     if (state.channels) {
         String thisId = device.id
-        for (int myindex = 1; myindex <= state.channels; myindex++) {
-            mychannel = myindex - 1
-            child = getChildDevice("${thisId}-Channel${myindex}")
+        for (int myindex = 0; myindex < state.channels; myindex++) {
+            mychannel = myindex + 1
+            child = getChildDevice("${thisId}-Channel${mychannel}")
             //log.info "Shelly ${state.devicetype} IP ${ip} myindex = ${myindex} mychannel = ${mychannel} child = ${child}"
             if (child) {
-                if (state."inputtype${mychannel}" == "button") { child.sendEvent(name: "contact", value: "inactive") }
-            } else { log.error "Shelly ${state.devicetype} IP ${ip} updateChildInactive something went wrong: $e re-initialize please." }
+                if (state."inputtype${myindex}" == "button") { child.sendEvent(name: "contact", value: "open") }
+            } else { log.error "Shelly ${state.devicetype} IP ${ip} updateChildClearButton something went wrong: $e re-initialize please." }
         }
     }
 }
 
 def getSettings(){
-
     logDebug "Shelly ${state.devicetype} IP ${ip} get settings called"
-    //getSettings()
     def params = [uri: "http://${username}:${password}@${ip}/rpc/Shelly.GetDeviceInfo"]
-
-try {
-    httpGet(params) {
-        resp -> resp.headers.each {
-        logJSON "Shelly ${state.devicetype} IP ${ip} response: ${it.name} : ${it.value}"
-    }
-        obs = resp.data
-        logJSON "Shelly ${state.devicetype} IP ${ip} params: ${params}"
-        logJSON "Shelly ${state.devicetype} IP ${ip} response contentType: ${resp.contentType}"
-	    logJSON "Shelly ${state.devicetype} IP ${ip} response data: ${resp.data}"
-
+    try {
+        httpGet(params) {
+            resp -> resp.headers.each {
+                logJSON "Shelly ${state.devicetype} IP ${ip} response: ${it.name} : ${it.value}"
+                }
+            obs = resp.data
+            logJSON "Shelly ${state.devicetype} IP ${ip} params: ${params}"
+            logJSON "Shelly ${state.devicetype} IP ${ip} response contentType: ${resp.contentType}"
+	        logJSON "Shelly ${state.devicetype} IP ${ip} response data: ${resp.data}"
+            if (getDataValue("presence") != "present") sendEvent(name: "presence", value: "present") 
+            updateDataValue("Device Name", obs.name)
+            updateDataValue("Device ID", obs.id)
+            updateDataValue("FW ID", obs.fw_id)
+            updateDataValue("FW Version", obs.ver)
+            updateDataValue("Application", obs.app)
+            updateDataValue("Model", obs.model)
+            updateDataValue("MAC", obs.mac)
         
-        updateDataValue("Device Name", obs.name)
-        updateDataValue("Device ID", obs.id)
-        updateDataValue("FW ID", obs.fw_id)
-        updateDataValue("FW Version", obs.ver)
-        updateDataValue("Application", obs.app)
-        updateDataValue("Model", obs.model)
-        updateDataValue("MAC", obs.mac)
-        
-        state.devicetype = obs.model
-        if (state.devicetype == "SNSN-0024X") { state.channels = 4 } 
-        else { state.channels = 0 }
-        
-    } // End try
-       } catch (e) {
-           log.error "Shelly ${state.devicetype} IP ${ip} getSettings something went wrong: $e"
-       }
-    
-} // End Device Info
-
+            state.devicetype = obs.model
+            if (state.devicetype == "SNSN-0024X") { state.channels = 4 } 
+            else { state.channels = 0 }
+            } // End try
+    } catch (e) {
+        log.error "Shelly ${state.devicetype} IP ${ip} getSettings something went wrong: $e"
+        if (getDataValue("presence") != "not present") sendEvent(name: "presence", value: "not present")
+        }
+}
 
 // Parse incoming device messages to generate events
 def parse(String description) {
     log.info "Shelly ${state.devicetype} IP ${ip} recieved callback message."
-    //log.info "Shelly ${state.devicetype} IP ${ip} Description = ${description}"
+    //log.debug "Shelly ${state.devicetype} IP ${ip} Description = ${description}"
     def msg = parseLanMessage(description)
     def headersAsString = msg.header // => headers as a string
     def headerMap = msg.headers      // => headers as a Map
@@ -322,17 +324,20 @@ def parse(String description) {
     //log.info "headersAsString = ${headersAsString} headerMap = ${headerMap} Body = ${body} Status = ${status} Data = ${data}"
     try { 
         mycmds2 = msg.header.split(); mycmd1 = mycmds2[0]; myaction = mycmds2[1].split('/')
-        myactionchannel = myaction[1]; myactionevent = myaction[2]
+        if (myaction[1] == "switch") { myactionindex = myaction[2]; myactionevent = myaction[3] }
+        else { myactionindex = myaction[1]; myactionevent = myaction[2] } 
+        myactionchannel = myactionindex.toInteger() + 1
         //log.info "Shelly ${state.devicetype} IP ${ip} Command = ${mycmd1} Action Channel = ${myactionchannel} Action Event = ${myactionevent}"
         } // end try
      catch (e) { log.error "Shelly ${state.devicetype} IP ${ip} parse something went wrong: $e"; return }
-     state."inputcount${myactionchannel}"++
+     state."inputcount${myactionindex}"++
      if (myactionevent == "on" || myactionevent == "off") { 
-         getContactChannelStatus(myactionchannel) 
+         state."inputupdateflag${myactionindex}" = true
+         getContactChannelStatus(myactionindex) 
          updateChild(myactionchannel)
          }
      if (myactionevent == "push" ) { 
-         state."inputupdateflag${mychannel}" = true
+         state."inputupdateflag${myactionindex}" = true
          updateChild(myactionchannel) 
      }
 }
